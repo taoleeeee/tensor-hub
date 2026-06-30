@@ -181,70 +181,38 @@ class WhisperTranscription(
                 order(ByteOrder.nativeOrder())
             }
 
-            // Run decoder — use reflection to access getSignatureRunner("decode")
-            // LiteRT Java API may not expose it directly, but the native wrapper has it
+            // Run decoder — access native wrapper's runSignature(String, Map, Map)
+            // Interpreter.runSignature(Map,Map) passes null for signature name
+            // but the underlying NativeInterpreterWrapper.runSignature(String,Map,Map) exists
             try {
-                val getRunner = interpreter.javaClass.getMethod(
-                    "getSignatureRunner", String::class.java
-                )
-                val runner = getRunner.invoke(interpreter, "decode")!!
+                val wrapperField = interpreter.javaClass.getDeclaredField("wrapper")
+                wrapperField.isAccessible = true
+                val wrapper = wrapperField.get(interpreter)!!
 
-                val setInput = runner.javaClass.getMethod(
-                    "setInput", String::class.java, Object::class.java
-                )
-                val runMethod = runner.javaClass.getMethod("run")
-                val getOutput = runner.javaClass.getMethod(
-                    "getOutput", String::class.java
+                val runSigMethod = wrapper.javaClass.getMethod(
+                    "runSignature",
+                    String::class.java,
+                    java.util.Map::class.java,
+                    java.util.Map::class.java
                 )
 
                 if (iteration == 0) {
-                    // Log available input/output names
-                    val getInputs = runner.javaClass.getMethod("getInputNames")
-                    val getOutputs = runner.javaClass.getMethod("getOutputNames")
-                    val inputNames = getInputs.invoke(runner) as? Set<*>
-                    val outputNames = getOutputs.invoke(runner) as? Set<*>
-                    Log.i(TAG, "Decode signature — inputs: $inputNames, outputs: $outputNames")
+                    // Log available methods on wrapper for debugging
+                    val methods = wrapper.javaClass.methods.map { it.name }.distinct().sorted()
+                    Log.i(TAG, "Wrapper methods: ${methods.filter { it.contains("ignature") || it.contains("run") }}")
                 }
 
-                // Try common tensor names for decode inputs
-                val encoderNames = arrayOf("encoder_output", "encoder_hidden_states", "input_0")
-                val idsNames = arrayOf("decoder_input_ids", "input_ids", "input_1")
-                val cacheNames = arrayOf("cache", "attention_mask", "input_2")
-                val logitsNames = arrayOf("logits", "output_0")
+                val decInputs = HashMap<String, Any>()
+                decInputs["encoder_output"] = encoderOutput
+                decInputs["decoder_input_ids"] = idsBuffer
+                decInputs["cache"] = cacheBuffer
+                val decOutputs = HashMap<String, Any>()
+                decOutputs["logits"] = logitsBuffer
 
-                var setEncoder = false
-                for (name in encoderNames) {
-                    try { setInput.invoke(runner, name, encoderOutput); setEncoder = true; break }
-                    catch (_: Exception) {}
-                }
-                for (name in idsNames) {
-                    try { setInput.invoke(runner, name, idsBuffer); break }
-                    catch (_: Exception) {}
-                }
-                for (name in cacheNames) {
-                    try { setInput.invoke(runner, name, cacheBuffer); break }
-                    catch (_: Exception) {}
-                }
-
-                runMethod.invoke(runner)
-
-                var rawLogits: Any? = null
-                for (name in logitsNames) {
-                    try { rawLogits = getOutput.invoke(runner, name); break }
-                    catch (_: Exception) {}
-                }
-
-                if (rawLogits is ByteBuffer) {
-                    rawLogits.rewind()
-                    logitsBuffer.put(rawLogits)
-                    logitsBuffer.rewind()
-                } else if (iteration == 0) {
-                    Log.w(TAG, "Decode output type: ${rawLogits?.javaClass}, attempting direct use")
-                }
+                runSigMethod.invoke(wrapper, "decode", decInputs, decOutputs)
             } catch (e: Exception) {
                 if (iteration == 0) {
-                    Log.e(TAG, "Decode signature failed: ${e.message}")
-                    e.printStackTrace()
+                    Log.e(TAG, "Decode signature failed: ${e.javaClass.simpleName}: ${e.message}")
                 }
                 throw e
             }
