@@ -25,7 +25,7 @@ class TensorHubHttpServer(
     }
 
     private val healthRoutes = HealthRoutes(inferenceEngine, modelManager)
-    private val audioRoutes = AudioRoutes(inferenceEngine)
+    private val audioRoutes = AudioRoutes(inferenceEngine, modelManager)
     private val embeddingRoutes = EmbeddingRoutes(inferenceEngine)
     private val modelRoutes = ModelRoutes(inferenceEngine, modelManager)
 

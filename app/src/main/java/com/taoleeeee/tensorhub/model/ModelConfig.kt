@@ -14,7 +14,9 @@ data class ModelConfig(
     val filename: String,
     val sizeBytes: Long = 0,
     val quantized: Boolean = true,
-    val description: String = ""
+    val description: String = "",
+    val vocabUrl: String? = null,
+    val vocabFilename: String? = null
 )
 
 @Serializable
@@ -37,7 +39,9 @@ object ModelRegistry {
             url = "https://huggingface.co/litert-community/whisper-base/resolve/main/whisper_base_30s_f32.tflite",
             filename = "whisper-base.tflite",
             sizeBytes = 277_000_000,
-            description = "Balanced speed and accuracy for transcription"
+            description = "Balanced speed and accuracy for transcription",
+            vocabUrl = "https://huggingface.co/openai/whisper-base/resolve/main/vocab.json",
+            vocabFilename = "vocab.json"
         ),
         ModelConfig(
             id = "bge-small-en-v1.5-q8",

@@ -8,11 +8,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
+import java.net.URL
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
 /**
  * Manages model download, caching, loading and lifecycle.
+ * Also handles auxiliary files like vocab.json for tokenizer support.
  */
 class ModelManager(private val context: Context) {
 
@@ -54,6 +56,17 @@ class ModelManager(private val context: Context) {
     }
 
     /**
+     * Get the vocab file for a model (e.g., vocab.json for Whisper).
+     * Returns null if the model doesn't require a vocab file.
+     */
+    fun getVocabFile(modelId: String): File? {
+        val config = ModelRegistry.getById(modelId) ?: return null
+        val vocabFilename = config.vocabFilename ?: return null
+        val file = File(modelsDir, vocabFilename)
+        return if (file.exists()) file else null
+    }
+
+    /**
      * Load a TFLite model into a MappedByteBuffer.
      */
     fun loadModel(modelId: String): MappedByteBuffer? {
@@ -76,6 +89,45 @@ class ModelManager(private val context: Context) {
     }
 
     /**
+     * Check if a model's vocab file is downloaded.
+     */
+    fun isVocabDownloaded(modelId: String): Boolean {
+        return getVocabFile(modelId) != null
+    }
+
+    /**
+     * Download a model's vocab file if configured and not already present.
+     */
+    suspend fun downloadVocabIfNeeded(modelId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val config = ModelRegistry.getById(modelId)
+            ?: return@withContext Result.failure(Exception("Unknown model: $modelId"))
+        val vocabUrl = config.vocabUrl
+            ?: return@withContext Result.success(Unit) // No vocab needed
+        val vocabFilename = config.vocabFilename
+            ?: return@withContext Result.success(Unit)
+        val targetFile = File(modelsDir, vocabFilename)
+
+        if (targetFile.exists()) {
+            Log.i(TAG, "Vocab already downloaded: $vocabFilename")
+            return@withContext Result.success(Unit)
+        }
+
+        try {
+            Log.i(TAG, "Downloading vocab: $vocabUrl")
+            URL(vocabUrl).openStream().use { input ->
+                targetFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Log.i(TAG, "Vocab downloaded: $vocabFilename (${targetFile.length()} bytes)")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Vocab download failed: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Get model info as JSON-compatible map.
      */
     fun getModelInfo(modelId: String): Map<String, Any>? {
@@ -87,7 +139,8 @@ class ModelManager(private val context: Context) {
             "type" to config.type.name.lowercase(),
             "downloaded" to (file?.exists() == true),
             "size_bytes" to (file?.length() ?: config.sizeBytes),
-            "description" to config.description
+            "description" to config.description,
+            "vocab_downloaded" to isVocabDownloaded(modelId)
         )
     }
 
@@ -103,7 +156,8 @@ class ModelManager(private val context: Context) {
                 "type" to config.type.name.lowercase(),
                 "downloaded" to (file?.exists() == true),
                 "size_bytes" to (file?.length() ?: config.sizeBytes),
-                "description" to config.description
+                "description" to config.description,
+                "vocab_downloaded" to isVocabDownloaded(config.id)
             )
         }
     }
