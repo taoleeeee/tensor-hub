@@ -129,6 +129,31 @@ class WhisperTranscription(
             val decIn = interpreter.getSignatureInputs("decode")
             val decOut = interpreter.getSignatureOutputs("decode")
             Log.i(TAG, "Decode inputs: ${decIn.contentToString()}, outputs: ${decOut.contentToString()}")
+
+            // Dump tensor shapes for decode signature
+            try {
+                for (name in decIn) {
+                    try {
+                        val idx = interpreter.getInputIndex(name)
+                        val tensor = interpreter.getInputTensor(idx)
+                        Log.i(TAG, "Decode input '$name': idx=$idx, shape=${tensor.shape().contentToString()}, dataType=${tensor.dataType()}, numBytes=${tensor.numBytes()}")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Cannot introspect decode input '$name': ${e.message}")
+                    }
+                }
+                for (name in decOut) {
+                    try {
+                        val idx = interpreter.getOutputIndex(name)
+                        val tensor = interpreter.getOutputTensor(idx)
+                        Log.i(TAG, "Decode output '$name': idx=$idx, shape=${tensor.shape().contentToString()}, dataType=${tensor.dataType()}, numBytes=${tensor.numBytes()}")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Cannot introspect decode output '$name': ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Tensor introspection failed: ${e.message}")
+            }
+
             encoderInitialized = true
         }
 
@@ -195,6 +220,21 @@ class WhisperTranscription(
             val decOutputs = HashMap<String, Any>()
             decOutputs[decOutputNames[0]] = logitsBuffer
             interpreter.runSignature(decInputs, decOutputs, "decode")
+
+            // Diagnostic: log tensor info on first iteration
+            if (iteration == 0) {
+                val logitsArr = FloatArray(10)
+                logitsBuffer.position(0)
+                val diagBB = ByteBuffer.allocate(40).order(ByteOrder.nativeOrder())
+                logitsBuffer.get(diagBB.array())
+                diagBB.rewind()
+                for (i in 0 until 10) logitsArr[i] = diagBB.float
+                Log.i(TAG, "Decode step 0: logits first 10 = ${logitsArr.contentToString()}")
+                Log.i(TAG, "Decode step 0: logitsBuffer capacity=${logitsBuffer.capacity()}, step=$step")
+                // Also check what the SOT sequence is
+                Log.i(TAG, "SOT sequence: ${sotSequence.contentToString()}, step=$step")
+            }
+
             // Greedy: find argmax at the current step position
             // Logits layout: [batch=1, seq=128, vocab=51865]
             // Offset to position `step`: step * VOCAB_SIZE * 4
@@ -214,13 +254,21 @@ class WhisperTranscription(
             // Argmax
             var bestToken = 0
             var bestScore = Float.NEGATIVE_INFINITY
+            var secondBest = 0
+            var secondBestScore = Float.NEGATIVE_INFINITY
             for (v in 0 until VOCAB_SIZE) {
                 val score = stepLogits.get()
                 if (score > bestScore) {
+                    secondBest = bestToken
+                    secondBestScore = bestScore
                     bestScore = score
                     bestToken = v
+                } else if (score > secondBestScore) {
+                    secondBest = v
+                    secondBestScore = score
                 }
             }
+            Log.d(TAG, "Step $iteration: argmax=$bestToken (score=$bestScore), 2nd=$secondBest (score=$secondBestScore), offset=$offset")
 
             // Check for end of text
             if (tokenizer.isEndOfText(bestToken)) {
