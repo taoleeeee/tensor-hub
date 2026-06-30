@@ -96,6 +96,35 @@ class ModelManager(private val context: Context) {
     }
 
     /**
+     * Download a model file if not already present.
+     */
+    suspend fun downloadModelIfNeeded(modelId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val config = ModelRegistry.getById(modelId)
+            ?: return@withContext Result.failure(Exception("Unknown model: $modelId"))
+        val targetFile = File(modelsDir, config.filename)
+
+        if (targetFile.exists()) {
+            Log.i(TAG, "Model already downloaded: ${config.filename}")
+            return@withContext Result.success(Unit)
+        }
+
+        try {
+            Log.i(TAG, "Downloading model: ${config.url}")
+            URL(config.url).openStream().use { input ->
+                targetFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Log.i(TAG, "Model downloaded: ${config.filename} (${targetFile.length()} bytes)")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Model download failed: ${e.message}")
+            targetFile.delete()
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Download a model's vocab file if configured and not already present.
      */
     suspend fun downloadVocabIfNeeded(modelId: String): Result<Unit> = withContext(Dispatchers.IO) {

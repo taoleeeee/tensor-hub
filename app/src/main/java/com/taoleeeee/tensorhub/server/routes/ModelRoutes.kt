@@ -51,6 +51,8 @@ class ModelRoutes(
 
         // Run loading in a blocking way (server thread handles it)
         val result = runBlocking {
+            // Download model file if not present
+            modelManager.downloadModelIfNeeded(modelId)
             // Download vocab file if needed (e.g., for Whisper tokenizer)
             modelManager.downloadVocabIfNeeded(modelId)
             inferenceEngine.loadModel(modelId)
