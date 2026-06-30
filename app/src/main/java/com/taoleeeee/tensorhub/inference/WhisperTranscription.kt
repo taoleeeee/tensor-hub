@@ -51,7 +51,7 @@ class WhisperTranscription(
     )
 
     private val tokenizer = WhisperTokenizer(vocabFile)
-    private var signatureNames: Set<String>? = null
+    private var encoderInitialized = false
 
 
 
@@ -121,11 +121,22 @@ class WhisperTranscription(
             order(ByteOrder.nativeOrder())
         }
 
+        // Discover tensor names on first run
+        if (!encoderInitialized) {
+            val encIn = interpreter.getSignatureInputs("encode")
+            val encOut = interpreter.getSignatureOutputs("encode")
+            Log.i(TAG, "Encode inputs: ${encIn.contentToString()}, outputs: ${encOut.contentToString()}")
+            val decIn = interpreter.getSignatureInputs("decode")
+            val decOut = interpreter.getSignatureOutputs("decode")
+            Log.i(TAG, "Decode inputs: ${decIn.contentToString()}, outputs: ${decOut.contentToString()}")
+            encoderInitialized = true
+        }
+
         // Run encoder via runSignature(inputs, outputs, signatureName)
         val encInputs = HashMap<String, Any>()
-        encInputs["input_features"] = inputBuffer
+        encInputs[interpreter.getSignatureInputs("encode")[0]] = inputBuffer
         val encOutputs = HashMap<String, Any>()
-        encOutputs["last_hidden_state"] = outputBuffer
+        encOutputs[interpreter.getSignatureOutputs("encode")[0]] = outputBuffer
         interpreter.runSignature(encInputs, encOutputs, "encode")
 
         Log.d(TAG, "Encoder output ready (${outputSize} bytes)")
@@ -174,13 +185,15 @@ class WhisperTranscription(
                 order(ByteOrder.nativeOrder())
             }
 
-            // Run decoder — runSignature(inputs, outputs, signatureName)
+            // Run decoder — use discovered tensor names
+            val decInputNames = interpreter.getSignatureInputs("decode")
+            val decOutputNames = interpreter.getSignatureOutputs("decode")
             val decInputs = HashMap<String, Any>()
-            decInputs["encoder_output"] = encoderOutput
-            decInputs["decoder_input_ids"] = idsBuffer
-            decInputs["cache"] = cacheBuffer
+            decInputs[decInputNames[0]] = encoderOutput
+            decInputs[decInputNames[1]] = idsBuffer
+            decInputs[decInputNames[2]] = cacheBuffer
             val decOutputs = HashMap<String, Any>()
-            decOutputs["logits"] = logitsBuffer
+            decOutputs[decOutputNames[0]] = logitsBuffer
             interpreter.runSignature(decInputs, decOutputs, "decode")
             // Greedy: find argmax at the current step position
             // Logits layout: [batch=1, seq=128, vocab=51865]
