@@ -59,7 +59,6 @@ dependencies {
 
     // LiteRT (TensorFlow Lite successor)
     implementation(libs.litert)
-    implementation(libs.litert.support)
     implementation(libs.litert.gpu)
     implementation(libs.litert.select.tf.ops)
 

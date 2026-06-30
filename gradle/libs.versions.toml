@@ -23,7 +23,6 @@ compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview"
 compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "material3" }
 compose-material-icons = { module = "androidx.compose.material:material-icons-extended" }
 litert = { module = "org.tensorflow:tensorflow-lite", version.ref = "litert" }
-litert-support = { module = "org.tensorflow:tensorflow-lite-support", version = "0.4.4" }
 litert-gpu = { module = "org.tensorflow:tensorflow-lite-gpu", version.ref = "litert" }
 litert-select-tf-ops = { module = "org.tensorflow:tensorflow-lite-select-tf-ops", version.ref = "litert" }
 nanohttpd = { module = "org.nanohttpd:nanohttpd", version.ref = "nanohttpd" }
