@@ -54,28 +54,19 @@ class EmbeddingInference(private val interpreter: Interpreter) {
             val tokens = tokenize(text)
             val inputIds = tokens.first
             val attentionMask = tokens.second
-            val tokenTypeIds = IntArray(MAX_SEQ_LEN) { 0 } // single sentence = all zeros
 
-            // Create input buffers
+            // Create input buffers (model accepts 2 inputs: input_ids + attention_mask)
             val inputIdsBuffer = createIntBuffer(inputIds)
             val attentionMaskBuffer = createIntBuffer(attentionMask)
-            val tokenTypeIdsBuffer = createIntBuffer(tokenTypeIds)
 
             // Create output buffer
             val outputBuffer = FloatBuffer.allocate(EMBEDDING_DIM)
 
-            // Run inference
-            val inputs = mapOf(
-                0 to inputIdsBuffer,
-                1 to attentionMaskBuffer,
-                2 to tokenTypeIdsBuffer
-            )
+            // Run inference with 2 inputs
+            val inputs = arrayOf(inputIdsBuffer, attentionMaskBuffer)
             val outputs = mapOf(0 to outputBuffer)
 
-            interpreter.runForMultipleInputsOutputs(
-                inputs.values.toTypedArray(),
-                outputs
-            )
+            interpreter.runForMultipleInputsOutputs(inputs, outputs)
 
             // Extract and normalize embedding
             val embedding = FloatArray(EMBEDDING_DIM)
