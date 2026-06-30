@@ -24,7 +24,7 @@ class EmbeddingInference(private val interpreter: Interpreter) {
 
     companion object {
         private const val TAG = "EmbeddingInference"
-        private const val MAX_SEQ_LEN = 512
+        private const val MAX_SEQ_LEN = 1024
         private const val EMBEDDING_DIM = 384
         private const val VOCAB_SIZE = 30522 // BGE/BERT vocab size
 
