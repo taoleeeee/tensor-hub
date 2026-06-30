@@ -15,6 +15,11 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+
+        // Only bundle arm64 native libs (Pixel 6 Pro is arm64)
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -60,7 +65,7 @@ dependencies {
     // LiteRT (TensorFlow Lite successor)
     implementation(libs.litert)
     implementation(libs.litert.gpu)
-    implementation(libs.litert.select.tf.ops)
+    // litert-select-tf-ops removed: huge package with ALL ops. Add back only if models need custom ops.
 
     // HTTP Server
     implementation(libs.nanohttpd)
