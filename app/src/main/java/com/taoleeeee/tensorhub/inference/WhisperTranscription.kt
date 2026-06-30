@@ -121,30 +121,17 @@ class WhisperTranscription(
 
         // Run encoder via signature API
         try {
-            val runner = interpreter.getSignatureRunner("encode")
-            val inputNames = runner.inputNames
-            val outputNames = runner.outputNames
-            Log.d(TAG, "Encode signature — inputs: $inputNames, outputs: $outputNames")
-
-            // Set input by first available name
-            runner.setInput(inputNames.first(), inputBuffer)
-            runner.run()
-            val rawOutput = runner.getOutput(outputNames.first())
-
-            // Copy output to our direct buffer
-            if (rawOutput is ByteBuffer) {
-                rawOutput.rewind()
-                outputBuffer.put(rawOutput)
-                outputBuffer.rewind()
-            } else {
-                Log.w(TAG, "Unexpected encoder output type: ${rawOutput?.javaClass}")
-                outputBuffer.rewind()
-            }
+            val sigKeys = interpreter.signatureKeys
+            Log.d(TAG, "Available signatures: $sigKeys")
+            val inputs = mapOf<String, Any>("input_features" to inputBuffer)
+            val outputs = HashMap<String, Any>()
+            outputs["last_hidden_state"] = outputBuffer
+            interpreter.runSignature("encode", inputs, outputs)
         } catch (e: Exception) {
             Log.w(TAG, "Signature 'encode' failed, trying index-based: ${e.message}")
             // Fallback: index-based run
-            val inputs = arrayOf(inputBuffer)
-            val outputs = mapOf(0 to outputBuffer)
+            val inputs = arrayOf<Any>(inputBuffer)
+            val outputs = mutableMapOf<Int, Any>(0 to outputBuffer)
             interpreter.runForMultipleInputsOutputs(inputs, outputs)
         }
 
@@ -196,31 +183,20 @@ class WhisperTranscription(
 
             // Run decoder
             try {
-                val runner = interpreter.getSignatureRunner("decode")
-                val inputNames = runner.inputNames
-                val outputNames = runner.outputNames
-
-                if (iteration == 0) {
-                    Log.d(TAG, "Decode signature — inputs: $inputNames, outputs: $outputNames")
-                }
-
-                // Map inputs by order: encoder_hidden, decoder_ids, cache
-                val inputValues = listOf(encoderOutput, idsBuffer, cacheBuffer)
-                for (i in inputNames.indices) {
-                    runner.setInput(inputNames[i], inputValues[i])
-                }
-                runner.run()
-                val rawLogits = runner.getOutput(outputNames.first())
-
-                if (rawLogits is ByteBuffer) {
-                    rawLogits.rewind()
-                    logitsBuffer.put(rawLogits)
-                    logitsBuffer.rewind()
-                }
+                val inputs = mapOf<String, Any>(
+                    "encoder_hidden_states" to encoderOutput,
+                    "decoder_input_ids" to idsBuffer,
+                    "cache" to cacheBuffer
+                )
+                val outputs = HashMap<String, Any>()
+                outputs["logits"] = logitsBuffer
+                interpreter.runSignature("decode", inputs, outputs)
             } catch (e: Exception) {
-                Log.w(TAG, "Signature 'decode' failed at step $iteration, trying index-based: ${e.message}")
-                val inputs = arrayOf(encoderOutput, idsBuffer, cacheBuffer)
-                val outputs = mapOf(0 to logitsBuffer)
+                if (iteration == 0) {
+                    Log.w(TAG, "Signature 'decode' failed, trying index-based: ${e.message}")
+                }
+                val inputs = arrayOf<Any>(encoderOutput, idsBuffer, cacheBuffer)
+                val outputs = mutableMapOf<Int, Any>(0 to logitsBuffer)
                 interpreter.runForMultipleInputsOutputs(inputs, outputs)
             }
 
@@ -282,16 +258,11 @@ class WhisperTranscription(
      */
     private fun buildCausalMask(): ByteBuffer {
         val size = 1 * 1 * DECODER_MAX_TOKENS * DECODER_MAX_TOKENS * 4
-        val buffer = ByteBuffer.allocateDirect(size).apply {
-            order(ByteOrder.nativeOrder())
-        }
-        for (b in 0 until 1) {
-            for (h in 0 until 1) {
-                for (i in 0 until DECODER_MAX_TOKENS) {
-                    for (j in 0 until DECODER_MAX_TOKENS) {
-                        putFloat(if (j <= i) MASK_ON else MASK_OFF)
-                    }
-                }
+        val buffer = ByteBuffer.allocateDirect(size)
+        buffer.order(ByteOrder.nativeOrder())
+        for (i in 0 until DECODER_MAX_TOKENS) {
+            for (j in 0 until DECODER_MAX_TOKENS) {
+                buffer.putFloat(if (j <= i) MASK_ON else MASK_OFF)
             }
         }
         buffer.rewind()

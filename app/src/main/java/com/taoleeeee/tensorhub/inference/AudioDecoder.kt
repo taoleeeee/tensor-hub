@@ -23,7 +23,8 @@ object AudioDecoder {
      * Decode an audio file to 16kHz mono float samples.
      * Returns samples normalized to [-1, 1] range.
      */
-    fun decode(file: File): Result<FloatArray> = try {
+    fun decode(file: File): Result<FloatArray> {
+        return try {
         val raf = RandomAccessFile(file, "r")
         val header = ByteArray(44)
         raf.readFully(header)
@@ -124,6 +125,7 @@ object AudioDecoder {
     } catch (e: Exception) {
         Log.e(TAG, "Audio decode failed: ${e.message}", e)
         Result.failure(e)
+        }
     }
 
     /**
