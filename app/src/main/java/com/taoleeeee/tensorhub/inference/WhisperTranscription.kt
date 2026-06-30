@@ -81,7 +81,7 @@ class WhisperTranscription(
             val encoderOutput = encode(melSpec)
 
             // 4. Decode: autoregressive loop
-            val tokenIds = decode(encoderOutput)
+            val tokenIds = decode(encoderOutput, language)
 
             // 5. Decode tokens to text
             val text = tokenizer.decode(tokenIds)
@@ -148,18 +148,18 @@ class WhisperTranscription(
     }
 
     /**
-     * Autoregressive decoder loop — follows Google's LiteRT ASR sample.
+     * Autoregressive decoder loop — follows Google's LiteRT ASR sample + Whisper prompt format.
      *
      * Decode signature:
      *   inputs:  float32[1,1500,512] (encoder output), int32[1,128] (token ids), float32[1,1,128,128] (causal mask)
      *   outputs: float32[1,128,51865] (logits)
      *
-     * Key differences from naive implementation:
-     * - Only uses START_OF_TRANSCRIPT_TOKEN (50258) as start token, not full SOT sequence
-     * - Causal mask uses -0.7f * Float.MAX_VALUE for masked positions (not -1e9)
-     * - Reads logits as flat float array, argmax at position i * VOCAB_SIZE
+     * Uses full Whisper SOT prompt: <|startoftranscript|><|en|><|transcribe|><|notimestamps|>
+     * Causal mask uses -0.7f * Float.MAX_VALUE per Google's reference.
+     * Logits read as flat float array, argmax at step * VOCAB_SIZE.
      */
-    private fun decode(encoderOutput: ByteBuffer): IntArray {
+    private fun decode(encoderOutput: ByteBuffer, language: String): IntArray {
+        val sotSequence = tokenizer.buildSotSequence(language)
         val generatedTokens = mutableListOf<Int>()
         val decInputNames = interpreter.getSignatureInputs("decode")
         val decOutputNames = interpreter.getSignatureOutputs("decode")
@@ -179,15 +179,20 @@ class WhisperTranscription(
             rewind()
         }
 
-        // Token IDs: only start token at position 0, rest zeros
+        // Token IDs: full SOT sequence at start, rest zeros
         val tokenIds = IntArray(DECODER_MAX_TOKENS) { 0 }
-        tokenIds[0] = START_OF_TRANSCRIPT_TOKEN
+        for (i in sotSequence.indices) {
+            tokenIds[i] = sotSequence[i]
+        }
+        var step = sotSequence.size  // position of next token to predict
+
+        Log.i(TAG, "SOT sequence: ${sotSequence.contentToString()}, starting at step=$step")
 
         // Output logits buffer: [1, 128, 51865] = 128 * 51865 floats
         val numLogits = DECODER_MAX_TOKENS * VOCAB_SIZE
 
         // Autoregressive loop
-        for (i in 0 until DECODER_MAX_TOKENS - 1) {
+        for (iteration in 0 until DECODER_MAX_TOKENS) {
             // Write token IDs to direct ByteBuffer
             val idsBuffer = ByteBuffer.allocateDirect(DECODER_MAX_TOKENS * 4).apply {
                 order(ByteOrder.nativeOrder())
@@ -217,9 +222,9 @@ class WhisperTranscription(
                 logits[idx] = logitsBuffer.float
             }
 
-            // Argmax at position i (the token we just predicted)
-            val startIndex = i * VOCAB_SIZE
-            val endIndex = (i + 1) * VOCAB_SIZE
+            // Argmax at position `step` (the token we just predicted)
+            val startIndex = step * VOCAB_SIZE
+            val endIndex = (step + 1) * VOCAB_SIZE
             var bestToken = startIndex
             var bestScore = logits[startIndex]
             for (idx in startIndex + 1 until endIndex) {
@@ -230,11 +235,11 @@ class WhisperTranscription(
             }
             val tokenId = bestToken - startIndex  // Convert flat index to token ID
 
-            Log.d(TAG, "Step $i: token=$tokenId (score=$bestScore)")
+            Log.d(TAG, "Step $iteration (pos=$step): token=$tokenId (score=${"%.2f".format(bestScore)})")
 
             // Check for end of text
             if (tokenId == END_OF_TEXT_TOKEN) {
-                Log.d(TAG, "EOT at step $i")
+                Log.d(TAG, "EOT at step $iteration")
                 break
             }
 
@@ -244,10 +249,16 @@ class WhisperTranscription(
             }
 
             // Feed predicted token back for next step
-            tokenIds[i + 1] = tokenId
+            if (step < DECODER_MAX_TOKENS - 1) {
+                tokenIds[step] = tokenId
+                step++
+            } else {
+                Log.d(TAG, "Max decoder length reached")
+                break
+            }
         }
 
-        Log.d(TAG, "Decoded ${generatedTokens.size} text tokens")
+        Log.d(TAG, "Decoded ${generatedTokens.size} text tokens in $step steps")
         return generatedTokens.toIntArray()
     }
 }
