@@ -5,6 +5,7 @@ import com.taoleeeee.tensorhub.inference.WhisperTranscription
 import com.taoleeeee.tensorhub.model.ModelManager
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoHTTPD.IHTTPSession
+import kotlinx.coroutines.runBlocking
 import fi.iki.elonen.NanoHTTPD.Response
 import kotlinx.serialization.json.*
 import java.io.File
@@ -61,9 +62,9 @@ class AudioRoutes(
             WhisperTranscription(interpreter, vocabFile)
         }
 
-        // Run transcription (blocking — NanoHTTPD runs on its own thread)
+        // Run transcription in blocking coroutine (NanoHTTPD runs on its own thread)
         val audioFile = File(tempFilePath)
-        val result = pipeline.transcribe(audioFile, language)
+        val result = runBlocking { pipeline.transcribe(audioFile, language) }
 
         // Clean up temp file
         audioFile.delete()

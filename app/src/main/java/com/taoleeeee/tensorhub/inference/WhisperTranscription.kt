@@ -119,21 +119,8 @@ class WhisperTranscription(
             order(ByteOrder.nativeOrder())
         }
 
-        // Run encoder via signature API
-        try {
-            val sigKeys = interpreter.signatureKeys
-            Log.d(TAG, "Available signatures: $sigKeys")
-            val inputs = mapOf<String, Any>("input_features" to inputBuffer)
-            val outputs = HashMap<String, Any>()
-            outputs["last_hidden_state"] = outputBuffer
-            interpreter.runSignature("encode", inputs, outputs)
-        } catch (e: Exception) {
-            Log.w(TAG, "Signature 'encode' failed, trying index-based: ${e.message}")
-            // Fallback: index-based run
-            val inputs = arrayOf<Any>(inputBuffer)
-            val outputs = mutableMapOf<Int, Any>(0 to outputBuffer)
-            interpreter.runForMultipleInputsOutputs(inputs, outputs)
-        }
+        // Run encoder — single input/output, use simple run()
+        interpreter.run(inputBuffer, outputBuffer)
 
         Log.d(TAG, "Encoder output ready (${outputSize} bytes)")
         return outputBuffer
@@ -181,24 +168,11 @@ class WhisperTranscription(
                 order(ByteOrder.nativeOrder())
             }
 
-            // Run decoder
-            try {
-                val inputs = mapOf<String, Any>(
-                    "encoder_hidden_states" to encoderOutput,
-                    "decoder_input_ids" to idsBuffer,
-                    "cache" to cacheBuffer
-                )
-                val outputs = HashMap<String, Any>()
-                outputs["logits"] = logitsBuffer
-                interpreter.runSignature("decode", inputs, outputs)
-            } catch (e: Exception) {
-                if (iteration == 0) {
-                    Log.w(TAG, "Signature 'decode' failed, trying index-based: ${e.message}")
-                }
-                val inputs = arrayOf<Any>(encoderOutput, idsBuffer, cacheBuffer)
-                val outputs = mutableMapOf<Int, Any>(0 to logitsBuffer)
-                interpreter.runForMultipleInputsOutputs(inputs, outputs)
-            }
+            // Run decoder — 3 inputs, 1 output
+            val decInputs = arrayOf<Any>(encoderOutput, idsBuffer, cacheBuffer)
+            val decOutputs = HashMap<Int, Any>()
+            decOutputs[0] = logitsBuffer
+            interpreter.runForMultipleInputsOutputs(decInputs, decOutputs)
 
             // Greedy: find argmax at the current step position
             // Logits layout: [batch=1, seq=128, vocab=51865]
