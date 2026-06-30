@@ -7,15 +7,17 @@ import org.tensorflow.lite.Interpreter
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.FloatBuffer
 
 /**
  * Complete Whisper transcription pipeline.
  *
- * Audio → MelSpectrogram → Encoder → Autoregreneous Decoder → Text
+ * Audio → MelSpectrogram → Encoder → Autoregressive Decoder → Text
  *
  * Uses TFLite signature API for models with named "encode" and "decode" sub-graphs.
  * All tensor I/O uses direct ByteBuffers for zero-copy NNAPI delegation.
+ *
+ * Decode logic follows Google's official LiteRT ASR sample:
+ * https://github.com/google-ai-edge/litert-samples/tree/main/compiled_model_api/speech_recognition
  *
  * Runs on Dispatchers.Default to avoid blocking the main thread.
  */
@@ -37,9 +39,13 @@ class WhisperTranscription(
         private const val DECODER_MAX_TOKENS = 128
         private const val VOCAB_SIZE = 51865
 
-        // Causal attention mask values
-        private const val MASK_ON = 0.0f
-        private const val MASK_OFF = -1e9f
+        // Whisper special tokens
+        private const val START_OF_TRANSCRIPT_TOKEN = 50258
+        private const val END_OF_TEXT_TOKEN = 50257
+
+        // Causal mask values — must match Google's reference implementation
+        private const val MASKED_IN = 0.0f
+        private const val MASKED_OUT = -0.7f * Float.MAX_VALUE  // ~-2.4e38, NOT -1e9
     }
 
     data class TranscriptionResult(
@@ -52,8 +58,6 @@ class WhisperTranscription(
 
     private val tokenizer = WhisperTokenizer(vocabFile)
     private var encoderInitialized = false
-
-
 
     /**
      * Transcribe audio from a WAV file.
@@ -77,7 +81,7 @@ class WhisperTranscription(
             val encoderOutput = encode(melSpec)
 
             // 4. Decode: autoregressive loop
-            val tokenIds = decode(encoderOutput, language)
+            val tokenIds = decode(encoderOutput)
 
             // 5. Decode tokens to text
             val text = tokenizer.decode(tokenIds)
@@ -129,31 +133,6 @@ class WhisperTranscription(
             val decIn = interpreter.getSignatureInputs("decode")
             val decOut = interpreter.getSignatureOutputs("decode")
             Log.i(TAG, "Decode inputs: ${decIn.contentToString()}, outputs: ${decOut.contentToString()}")
-
-            // Dump tensor shapes for decode signature
-            try {
-                for (name in decIn) {
-                    try {
-                        val idx = interpreter.getInputIndex(name)
-                        val tensor = interpreter.getInputTensor(idx)
-                        Log.i(TAG, "Decode input '$name': idx=$idx, shape=${tensor.shape().contentToString()}, dataType=${tensor.dataType()}, numBytes=${tensor.numBytes()}")
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Cannot introspect decode input '$name': ${e.message}")
-                    }
-                }
-                for (name in decOut) {
-                    try {
-                        val idx = interpreter.getOutputIndex(name)
-                        val tensor = interpreter.getOutputTensor(idx)
-                        Log.i(TAG, "Decode output '$name': idx=$idx, shape=${tensor.shape().contentToString()}, dataType=${tensor.dataType()}, numBytes=${tensor.numBytes()}")
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Cannot introspect decode output '$name': ${e.message}")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Tensor introspection failed: ${e.message}")
-            }
-
             encoderInitialized = true
         }
 
@@ -169,146 +148,106 @@ class WhisperTranscription(
     }
 
     /**
-     * Autoregressive decoder loop.
-     * Runs the decoder up to DECODER_MAX_TOKENS times, generating one token per step.
+     * Autoregressive decoder loop — follows Google's LiteRT ASR sample.
      *
-     * Decoder inputs:
-     *   - encoder_hidden_states: float32[1, 1500, 512] (fixed)
-     *   - decoder_input_ids: int32[1, 128] (grows each step)
-     *   - cache: float32[1, 1, 128, 128] (causal mask / KV cache)
+     * Decode signature:
+     *   inputs:  float32[1,1500,512] (encoder output), int32[1,128] (token ids), float32[1,1,128,128] (causal mask)
+     *   outputs: float32[1,128,51865] (logits)
      *
-     * Decoder output:
-     *   - logits: float32[1, 128, 51865] (vocab scores per position)
+     * Key differences from naive implementation:
+     * - Only uses START_OF_TRANSCRIPT_TOKEN (50258) as start token, not full SOT sequence
+     * - Causal mask uses -0.7f * Float.MAX_VALUE for masked positions (not -1e9)
+     * - Reads logits as flat float array, argmax at position i * VOCAB_SIZE
      */
-    private fun decode(encoderOutput: ByteBuffer, language: String): IntArray {
-        val sotSequence = tokenizer.buildSotSequence(language)
+    private fun decode(encoderOutput: ByteBuffer): IntArray {
         val generatedTokens = mutableListOf<Int>()
+        val decInputNames = interpreter.getSignatureInputs("decode")
+        val decOutputNames = interpreter.getSignatureOutputs("decode")
 
-        // Causal attention mask: lower triangular [1, 1, 128, 128]
-        val cacheBuffer = buildCausalMask()
-
-        // Build decoder input IDs — start with SOT sequence, pad to 128
-        val decoderInputIds = IntArray(DECODER_MAX_TOKENS) { 0 }
-        for (i in sotSequence.indices) {
-            decoderInputIds[i] = sotSequence[i]
+        // Build causal mask: lower triangular [1, 1, 128, 128]
+        // Matches Google's reference: MASKED_IN=0.0, MASKED_OUT=-0.7f*MAX_VALUE
+        val maskSize = DECODER_MAX_TOKENS * DECODER_MAX_TOKENS
+        val causalMask = FloatArray(maskSize) { MASKED_OUT }
+        for (r in 0 until DECODER_MAX_TOKENS) {
+            for (c in 0..r) {
+                causalMask[r * DECODER_MAX_TOKENS + c] = MASKED_IN
+            }
+        }
+        val maskBuffer = ByteBuffer.allocateDirect(maskSize * 4).apply {
+            order(ByteOrder.nativeOrder())
+            for (v in causalMask) putFloat(v)
+            rewind()
         }
 
-        var step = sotSequence.size  // position of next token to predict
+        // Token IDs: only start token at position 0, rest zeros
+        val tokenIds = IntArray(DECODER_MAX_TOKENS) { 0 }
+        tokenIds[0] = START_OF_TRANSCRIPT_TOKEN
+
+        // Output logits buffer: [1, 128, 51865] = 128 * 51865 floats
+        val numLogits = DECODER_MAX_TOKENS * VOCAB_SIZE
 
         // Autoregressive loop
-        for (iteration in 0 until DECODER_MAX_TOKENS) {
-            // Allocate direct ByteBuffer for decoder_input_ids: 128 × 4 bytes
+        for (i in 0 until DECODER_MAX_TOKENS - 1) {
+            // Write token IDs to direct ByteBuffer
             val idsBuffer = ByteBuffer.allocateDirect(DECODER_MAX_TOKENS * 4).apply {
                 order(ByteOrder.nativeOrder())
-                for (i in 0 until DECODER_MAX_TOKENS) putInt(decoderInputIds[i])
+                for (id in tokenIds) putInt(id)
                 rewind()
             }
 
-            // Allocate output: 1 × 128 × 51865 × 4 bytes (logits)
-            // This is ~25MB — allocate once and reuse
-            val logitsBuffer = ByteBuffer.allocateDirect(1 * DECODER_MAX_TOKENS * VOCAB_SIZE * 4).apply {
+            // Allocate logits output buffer
+            val logitsBuffer = ByteBuffer.allocateDirect(numLogits * 4).apply {
                 order(ByteOrder.nativeOrder())
             }
 
-            // Run decoder — use discovered tensor names
-            val decInputNames = interpreter.getSignatureInputs("decode")
-            val decOutputNames = interpreter.getSignatureOutputs("decode")
+            // Run decoder
             val decInputs = HashMap<String, Any>()
             decInputs[decInputNames[0]] = encoderOutput
             decInputs[decInputNames[1]] = idsBuffer
-            decInputs[decInputNames[2]] = cacheBuffer
+            decInputs[decInputNames[2]] = maskBuffer
             val decOutputs = HashMap<String, Any>()
             decOutputs[decOutputNames[0]] = logitsBuffer
             interpreter.runSignature(decInputs, decOutputs, "decode")
 
-            // Diagnostic: log tensor info on first iteration
-            if (iteration == 0) {
-                val logitsArr = FloatArray(10)
-                logitsBuffer.position(0)
-                val diagBB = ByteBuffer.allocate(40).order(ByteOrder.nativeOrder())
-                logitsBuffer.get(diagBB.array())
-                diagBB.rewind()
-                for (i in 0 until 10) logitsArr[i] = diagBB.float
-                Log.i(TAG, "Decode step 0: logits first 10 = ${logitsArr.contentToString()}")
-                Log.i(TAG, "Decode step 0: logitsBuffer capacity=${logitsBuffer.capacity()}, step=$step")
-                // Also check what the SOT sequence is
-                Log.i(TAG, "SOT sequence: ${sotSequence.contentToString()}, step=$step")
+            // Read logits as flat float array
+            val logits = FloatArray(numLogits)
+            logitsBuffer.rewind()
+            logitsBuffer.order(ByteOrder.nativeOrder())
+            for (idx in 0 until numLogits) {
+                logits[idx] = logitsBuffer.float
             }
 
-            // Greedy: find argmax at the current step position
-            // Logits layout: [batch=1, seq=128, vocab=51865]
-            // Offset to position `step`: step * VOCAB_SIZE * 4
-            val offset = step * VOCAB_SIZE * 4
-            logitsBuffer.position(offset)
-            val stepLogits = FloatBuffer.wrap(FloatArray(VOCAB_SIZE))
-            // Read from ByteBuffer into FloatBuffer
-            val tempArr = ByteArray(VOCAB_SIZE * 4)
-            logitsBuffer.position(offset)
-            logitsBuffer.get(tempArr)
-            val tempBB = ByteBuffer.wrap(tempArr).order(ByteOrder.nativeOrder())
-            for (v in 0 until VOCAB_SIZE) {
-                stepLogits.put(tempBB.float)
-            }
-            stepLogits.rewind()
-
-            // Argmax
-            var bestToken = 0
-            var bestScore = Float.NEGATIVE_INFINITY
-            var secondBest = 0
-            var secondBestScore = Float.NEGATIVE_INFINITY
-            for (v in 0 until VOCAB_SIZE) {
-                val score = stepLogits.get()
-                if (score > bestScore) {
-                    secondBest = bestToken
-                    secondBestScore = bestScore
-                    bestScore = score
-                    bestToken = v
-                } else if (score > secondBestScore) {
-                    secondBest = v
-                    secondBestScore = score
+            // Argmax at position i (the token we just predicted)
+            val startIndex = i * VOCAB_SIZE
+            val endIndex = (i + 1) * VOCAB_SIZE
+            var bestToken = startIndex
+            var bestScore = logits[startIndex]
+            for (idx in startIndex + 1 until endIndex) {
+                if (logits[idx] > bestScore) {
+                    bestScore = logits[idx]
+                    bestToken = idx
                 }
             }
-            Log.d(TAG, "Step $iteration: argmax=$bestToken (score=$bestScore), 2nd=$secondBest (score=$secondBestScore), offset=$offset")
+            val tokenId = bestToken - startIndex  // Convert flat index to token ID
+
+            Log.d(TAG, "Step $i: token=$tokenId (score=$bestScore)")
 
             // Check for end of text
-            if (tokenizer.isEndOfText(bestToken)) {
-                Log.d(TAG, "EOT at step $iteration, token=$bestToken")
+            if (tokenId == END_OF_TEXT_TOKEN) {
+                Log.d(TAG, "EOT at step $i")
                 break
             }
 
-            // Skip special tokens in output but still feed them back
-            if (!tokenizer.isSpecial(bestToken)) {
-                generatedTokens.add(bestToken)
+            // Collect non-special tokens for output
+            if (!tokenizer.isSpecial(tokenId)) {
+                generatedTokens.add(tokenId)
             }
 
-            // Append token to decoder input for next step
-            if (step < DECODER_MAX_TOKENS - 1) {
-                decoderInputIds[step] = bestToken
-                step++
-            } else {
-                Log.d(TAG, "Max decoder length reached")
-                break
-            }
+            // Feed predicted token back for next step
+            tokenIds[i + 1] = tokenId
         }
 
-        Log.d(TAG, "Decoded ${generatedTokens.size} text tokens in ${step} steps")
+        Log.d(TAG, "Decoded ${generatedTokens.size} text tokens")
         return generatedTokens.toIntArray()
-    }
-
-    /**
-     * Build causal attention mask: lower triangular float32[1, 1, 128, 128].
-     * 0.0 for positions that can attend, -1e9 for masked positions.
-     */
-    private fun buildCausalMask(): ByteBuffer {
-        val size = 1 * 1 * DECODER_MAX_TOKENS * DECODER_MAX_TOKENS * 4
-        val buffer = ByteBuffer.allocateDirect(size)
-        buffer.order(ByteOrder.nativeOrder())
-        for (i in 0 until DECODER_MAX_TOKENS) {
-            for (j in 0 until DECODER_MAX_TOKENS) {
-                buffer.putFloat(if (j <= i) MASK_ON else MASK_OFF)
-            }
-        }
-        buffer.rewind()
-        return buffer
     }
 }
