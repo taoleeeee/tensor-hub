@@ -213,6 +213,15 @@ class WhisperTranscription(
             } catch (e: Exception) {
                 if (iteration == 0) {
                     Log.e(TAG, "Decode signature failed: ${e.javaClass.simpleName}: ${e.message}")
+                    // Dump interpreter class structure for debugging
+                    try {
+                        val fields = interpreter.javaClass.declaredFields.map { "${it.type.simpleName} ${it.name}" }
+                        Log.i(TAG, "Interpreter fields: $fields")
+                        val methods = interpreter.javaClass.declaredMethods.map { "${it.returnType.simpleName} ${it.name}(${it.parameterTypes.joinToString { it.simpleName }})" }
+                        Log.i(TAG, "Interpreter methods: ${methods.filter { it.contains("ignature") || it.contains("run") || it.contains("Runner") }}")
+                    } catch (ex: Exception) {
+                        Log.w(TAG, "Class dump failed: ${ex.message}")
+                    }
                 }
                 throw e
             }
