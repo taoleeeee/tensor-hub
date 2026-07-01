@@ -144,12 +144,12 @@ std::vector<int> WhisperDecoder::transcribe(const float* pcm_samples, int sample
     for (int i = 0; i < input_count; ++i) {
         const char* name = TfLiteSignatureRunnerGetInputName(decode_runner, i);
         TfLiteTensor* tensor = TfLiteSignatureRunnerGetInputTensor(decode_runner, name);
-        const TfLiteIntArray* dims = TfLiteTensorDims(tensor);
-        if (dims->size == 3) {
+        int ndims = TfLiteTensorNumDims(tensor);
+        if (ndims == 3) {
             dec_enc_input = tensor;
-        } else if (dims->size == 4) {
+        } else if (ndims == 4) {
             dec_mask = tensor;
-        } else if (dims->size == 2) {
+        } else if (ndims == 2) {
             dec_tokens = tensor;
         }
     }

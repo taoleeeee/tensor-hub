@@ -65,7 +65,8 @@ TfLiteTensor* TfLiteSignatureRunnerGetInputTensor(const TfLiteSignatureRunner* r
 TfLiteTensor* TfLiteSignatureRunnerGetOutputTensor(const TfLiteSignatureRunner* runner, const char* output_name);
 
 // Tensor access
-TfLiteIntArray* TfLiteTensorDims(const TfLiteTensor* tensor);
+int TfLiteTensorNumDims(const TfLiteTensor* tensor);
+int TfLiteTensorDim(const TfLiteTensor* tensor, int dim_index);
 void* TfLiteTensorData(const TfLiteTensor* tensor);
 
 #ifdef __cplusplus
