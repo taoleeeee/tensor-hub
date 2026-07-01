@@ -142,7 +142,8 @@ std::vector<int> WhisperDecoder::transcribe(const float* pcm_samples, int sample
 
     int input_count = TfLiteSignatureRunnerGetInputCount(decode_runner);
     for (int i = 0; i < input_count; ++i) {
-        TfLiteTensor* tensor = TfLiteSignatureRunnerGetInputTensor(decode_runner, i);
+        const char* name = TfLiteSignatureRunnerGetInputName(decode_runner, i);
+        TfLiteTensor* tensor = TfLiteSignatureRunnerGetInputTensor(decode_runner, name);
         const TfLiteIntArray* dims = TfLiteTensorDims(tensor);
         if (dims->size == 3) {
             dec_enc_input = tensor;

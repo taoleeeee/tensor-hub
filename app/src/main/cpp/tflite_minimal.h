@@ -59,6 +59,8 @@ TfLiteStatus TfLiteSignatureRunnerInvoke(TfLiteSignatureRunner* runner);
 // Signature runner I/O
 size_t TfLiteSignatureRunnerGetInputCount(const TfLiteSignatureRunner* runner);
 size_t TfLiteSignatureRunnerGetOutputCount(const TfLiteSignatureRunner* runner);
+const char* TfLiteSignatureRunnerGetInputName(const TfLiteSignatureRunner* runner, size_t index);
+const char* TfLiteSignatureRunnerGetOutputName(const TfLiteSignatureRunner* runner, size_t index);
 TfLiteTensor* TfLiteSignatureRunnerGetInputTensor(const TfLiteSignatureRunner* runner, const char* input_name);
 TfLiteTensor* TfLiteSignatureRunnerGetOutputTensor(const TfLiteSignatureRunner* runner, const char* output_name);
 
