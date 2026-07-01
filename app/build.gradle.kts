@@ -73,7 +73,7 @@ dependencies {
     // LiteRT (TensorFlow Lite successor)
     implementation(libs.litert)
     implementation(libs.litert.gpu)
-    // litert-select-tf-ops removed: huge package with ALL ops. Add back only if models need custom ops.
+    implementation(libs.litert.select.tf.ops)  // Required for Prefab native C++ build
 
     // HTTP Server
     implementation(libs.nanohttpd)
