@@ -13,7 +13,8 @@ JNIEXPORT jlong JNICALL
 Java_com_taoleeeee_tensorhub_inference_WhisperNative_initNative(
         JNIEnv* env,
         jobject thiz,
-        jstring model_path_obj) {
+        jstring model_path_obj,
+        jboolean use_nnapi) {
     if (!model_path_obj) {
         LOGE("initNative: modelPath is null");
         return 0;
@@ -25,7 +26,7 @@ Java_com_taoleeeee_tensorhub_inference_WhisperNative_initNative(
     }
     
     WhisperDecoder* decoder = new WhisperDecoder();
-    bool success = decoder->load_model(model_path);
+    bool success = decoder->load_model(model_path, use_nnapi);
     
     env->ReleaseStringUTFChars(model_path_obj, model_path);
     

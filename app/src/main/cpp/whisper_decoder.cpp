@@ -1,5 +1,6 @@
 #include "whisper_decoder.h"
 #include "tensorflow/lite/kernels/register.h"
+#include "tensorflow/lite/delegates/nnapi/nnapi_delegate.h"
 #include <android/log.h>
 #include <cstring>
 #include <unordered_map>
@@ -10,8 +11,8 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 
-bool WhisperDecoder::load_model(const std::string& model_path) {
-    LOGI("Loading model from %s", model_path.c_str());
+bool WhisperDecoder::load_model(const std::string& model_path, bool use_nnapi) {
+    LOGI("Loading model from %s (use_nnapi=%d)", model_path.c_str(), use_nnapi);
     model = tflite::FlatBufferModel::BuildFromFile(model_path.c_str());
     if (!model) {
         LOGE("Failed to build FlatBufferModel from %s", model_path.c_str());
@@ -24,6 +25,21 @@ bool WhisperDecoder::load_model(const std::string& model_path) {
     if (!interpreter) {
         LOGE("Failed to build interpreter");
         return false;
+    }
+
+    // Set threads to 4 to maximize CPU utilization on Cortex big/mid cores
+    interpreter->SetNumThreads(4);
+    LOGI("Set TFLite interpreter thread count to 4");
+
+    if (use_nnapi) {
+        LOGI("Applying native NNAPI delegate to the interpreter...");
+        tflite::StatefulNnApiDelegate::Options delegate_options;
+        auto nnapi_delegate = std::make_unique<tflite::StatefulNnApiDelegate>(delegate_options);
+        if (interpreter->ModifyGraphWithDelegate(std::move(nnapi_delegate)) != kTfLiteOk) {
+            LOGW("Failed to apply native NNAPI delegate, falling back to CPU");
+        } else {
+            LOGI("Native NNAPI delegate applied successfully");
+        }
     }
 
     // Allocate tensors initially

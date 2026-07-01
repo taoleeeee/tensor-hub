@@ -37,7 +37,7 @@ private:
 public:
     WhisperDecoder() = default;
     
-    bool load_model(const std::string& model_path);
+    bool load_model(const std::string& model_path, bool use_nnapi = true);
     std::vector<int> transcribe(const float* pcm_samples, int sample_count, const std::string& lang);
 };
 
