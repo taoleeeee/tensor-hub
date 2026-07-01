@@ -7,7 +7,7 @@ import java.io.File
  * Kotlin JNI bridge for Whisper C++ native execution.
  * Handles loading `libwhisper_native.so` and manages the native decoder lifecycle.
  */
-class WhisperNative(modelFile: File) : AutoCloseable {
+class WhisperNative(modelFile: File, useNnapi: Boolean = true) : AutoCloseable {
 
     companion object {
         private const val TAG = "WhisperNative"
@@ -25,11 +25,11 @@ class WhisperNative(modelFile: File) : AutoCloseable {
     private var nativeHandle: Long = 0
 
     init {
-        nativeHandle = initNative(modelFile.absolutePath)
+        nativeHandle = initNative(modelFile.absolutePath, useNnapi)
         if (nativeHandle == 0L) {
-            throw RuntimeException("Failed to initialize native Whisper decoder for model path: ${modelFile.absolutePath}")
+            throw RuntimeException("Failed to initialize native Whisper decoder for model path: ${modelFile.absolutePath} (nnapi=$useNnapi)")
         }
-        Log.i(TAG, "Initialized native decoder with handle $nativeHandle")
+        Log.i(TAG, "Initialized native decoder with handle $nativeHandle (nnapi=$useNnapi)")
     }
 
     /**
@@ -53,7 +53,7 @@ class WhisperNative(modelFile: File) : AutoCloseable {
     }
 
     // Native JNI declarations
-    private external fun initNative(modelPath: String): Long
+    private external fun initNative(modelPath: String, useNnapi: Boolean): Long
     private external fun transcribeNative(handle: Long, pcmSamples: FloatArray, language: String): IntArray?
     private external fun releaseNative(handle: Long)
 }

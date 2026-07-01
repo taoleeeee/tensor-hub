@@ -49,6 +49,7 @@ class AudioRoutes(
         val language = session.parms["language"] ?: "en"
         val responseFormat = session.parms["response_format"] ?: "json"
         val engine = session.parms["engine"] ?: "native"
+        val useNnapi = session.parms["use_nnapi"]?.toBoolean() ?: true
 
         val audioFile = File(tempFilePath)
         val text: String
@@ -68,8 +69,9 @@ class AudioRoutes(
                 val vocabFile = modelManager.getVocabFile(model)
                     ?: throw Exception("Vocab file not found for $model. Download the model first.")
 
-                val nativePipeline = nativePipelines.getOrPut(model) {
-                    WhisperNative(modelFile)
+                val cacheKey = "$model-$useNnapi"
+                val nativePipeline = nativePipelines.getOrPut(cacheKey) {
+                    WhisperNative(modelFile, useNnapi)
                 }
 
                 // Decode WAV samples to 16kHz mono floats
@@ -121,6 +123,7 @@ class AudioRoutes(
                     put("duration", durationSec.toDouble())
                     put("text", text)
                     put("engine", engine)
+                    put("use_nnapi", useNnapi)
                     put("inference_time_ms", elapsed)
                     put("token_count", tokenCount)
                     put("segments", buildJsonArray {
